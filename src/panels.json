@@ -1,0 +1,46 @@
+{
+  "panels": [
+    {
+      "id": "prism26",
+      "name": "Prism 2.6",
+      "pitch": 2.604,
+      "wMM": 500,
+      "hMM": 500,
+      "pxW": 192,
+      "pxH": 192,
+      "kg": 7.98,
+      "maxW": 143,
+      "avgW": 71.5,
+      "notes": "19.7\"x19.7\", 17.6 lbs, 1200 nits, spec verified"
+    },
+    {
+      "id": "legend29",
+      "name": "Legend 2.9",
+      "pitch": 2.976,
+      "wMM": 500,
+      "hMM": 500,
+      "pxW": 168,
+      "pxH": 168,
+      "kg": 7.48,
+      "maxW": 140,
+      "avgW": 70,
+      "notes": "19.7\"x19.7\", 16.5 lbs, 1000 nits, spec verified"
+    }
+  ],
+  "processors": [
+    {
+      "id": "mx30",
+      "name": "NovaStar MX30",
+      "ports": 12,
+      "portCap": 659722,
+      "notes": "PLACEHOLDER — verify port count & capacity against NovaStar docs"
+    },
+    {
+      "id": "mx40",
+      "name": "NovaStar MX40 Pro",
+      "ports": 20,
+      "portCap": 659722,
+      "notes": "PLACEHOLDER — verify port count & capacity against NovaStar docs"
+    }
+  ]
+}
