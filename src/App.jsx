@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { jsPDF } from "jspdf";
 import specs from "./panels.json";
 
 /* ============================================================
@@ -21,6 +22,9 @@ function ftIn(feet) {
   return i === 12 ? `${f + 1}' 0"` : `${f}' ${i}"`;
 }
 function gcd(a, b) { return b ? gcd(b, a % b) : a; }
+function slugify(s) {
+  return s.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
 function colName(i) {
   let s = "";
   i += 1;
@@ -61,7 +65,8 @@ export default function RubyLEDCalc() {
   const [pW, setPW] = useState(10);
   const [pH, setPH] = useState(6);
   const [toast, setToast] = useState("");
-  const [mapImg, setMapImg] = useState(null);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [screenName, setScreenName] = useState("");
 
   const panel = PANELS.find(p => p.id === panelId);
   const proc = PROCESSORS.find(p => p.id === procId);
@@ -153,6 +158,26 @@ export default function RubyLEDCalc() {
     ].join("\n");
   }, [calc, panel, proc, metric]);
 
+  const proposalFields = useMemo(() => {
+    const c = calc;
+    const dims = metric
+      ? `${c.wM.toFixed(2)}m × ${c.hM.toFixed(2)}m`
+      : `${ftIn(c.wFt)} × ${ftIn(c.hFt)}`;
+    return [
+      ["Panel Model", panel.name],
+      ["Wall Size", dims],
+      ["Panel Configuration", `${c.cw} wide × ${c.ch} high (${c.total} panels)`],
+      ["Resolution", `${c.resW} × ${c.resH} (${(c.totalPx / 1e6).toFixed(2)}M pixels)`],
+      ["Aspect Ratio", `${c.ratioTxt} (${c.ratio})`],
+      ["Pixel Pitch", `${panel.pitch}mm`],
+      ["Minimum Viewing Distance", metric ? `${c.viewM.toFixed(1)} m` : `${c.viewFt.toFixed(1)} ft`],
+      ["Total Weight", metric ? `${Math.round(c.kgs).toLocaleString()} kg` : `${Math.round(c.lbs).toLocaleString()} lbs`],
+      ["Max Power", `${Math.round(c.maxKW * 1000).toLocaleString()} W`],
+      ["Circuits (20A @ 80%)", `${c.cir120} @ 120V or ${c.cir208} @ 208V`],
+      ["Processor / Ports", `${proc.name} — ${c.portsUsed} of ${proc.ports} ports used (${c.colsPerPort} columns/port)`],
+    ];
+  }, [calc, panel, proc, metric]);
+
   const copyIt = () => {
     const done = () => { setToast("Copied to clipboard"); setTimeout(() => setToast(""), 1800); };
     if (navigator.clipboard?.writeText) {
@@ -170,7 +195,7 @@ export default function RubyLEDCalc() {
   };
 
   /* ---------- Render the wiring map to a canvas for export ---------- */
-  const downloadMap = () => {
+  const buildMapCanvas = () => {
     const CELL = 160;                     // px per panel (high res for crisp export)
     const TOP = 120;                      // space for port badges
     const PAD = 36;
@@ -255,19 +280,75 @@ export default function RubyLEDCalc() {
     g2.textAlign = "left";
     g2.fillText(`RubyLED ${panel.name} — ${calc.cw}x${calc.ch} — ${proc.name} (${calc.portsUsed}/${proc.ports} ports)`, PAD, 42);
 
-    // Sandboxed preview environments block programmatic downloads,
-    // so show the image in-app; user saves via long-press / right-click.
-    // In the production build this can be a direct .png download.
-    setMapImg(cv.toDataURL("image/png"));
+    return cv;
   };
 
-  const tryDownload = () => {
-    try {
-      const a = document.createElement("a");
-      a.href = mapImg;
-      a.download = `rubyled-data-map-${calc.cw}x${calc.ch}.png`;
-      a.click();
-    } catch (e) { /* blocked in sandbox */ }
+  /* ---------- Build & download the one-page proposal PDF ---------- */
+  const exportPdf = (rawName) => {
+    const cv = buildMapCanvas();
+    const imgData = cv.toDataURL("image/png");
+
+    const doc = new jsPDF({ unit: "pt", format: "letter", orientation: "portrait" });
+    const pageW = doc.internal.pageSize.getWidth();
+    const marginX = 40;
+    const contentW = pageW - marginX * 2;
+
+    // header
+    const name = rawName.trim() || "LED Wall";
+    let y = 56;
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(22);
+    doc.setTextColor(17, 17, 17);
+    doc.text(name, marginX, y);
+
+    // thin red rule under the header
+    y += 12;
+    doc.setDrawColor(174, 0, 27);
+    doc.setLineWidth(1.5);
+    doc.line(marginX, y, pageW - marginX, y);
+    y += 26;
+
+    // data map graphic, scaled to fit width with margins, aspect preserved,
+    // capped in height so the field table always has room below it
+    const maxImgH = 380;
+    let imgW = contentW;
+    let imgH = (imgW * cv.height) / cv.width;
+    if (imgH > maxImgH) {
+      imgH = maxImgH;
+      imgW = (imgH * cv.width) / cv.height;
+    }
+    const imgX = marginX + (contentW - imgW) / 2;
+    doc.addImage(imgData, "PNG", imgX, y, imgW, imgH);
+    y += imgH + 28;
+
+    // proposal fields as a two-column table with alternating row shading
+    const rowH = 22;
+    const col1W = contentW * 0.4;
+    doc.setFontSize(10.5);
+    proposalFields.forEach(([label, value], i) => {
+      if (i % 2 === 1) {
+        doc.setFillColor(243, 243, 243);
+        doc.rect(marginX, y, contentW, rowH, "F");
+      }
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(17, 17, 17);
+      doc.text(label, marginX + 10, y + rowH / 2 + 3.5);
+      doc.setFont("helvetica", "normal");
+      doc.setTextColor(40, 40, 40);
+      doc.text(value, marginX + col1W + 10, y + rowH / 2 + 3.5);
+      y += rowH;
+    });
+
+    const slug = slugify(name) || "led-wall";
+    doc.save(`${slug}.pdf`);
+  };
+
+  const submitExport = (e) => {
+    e.preventDefault();
+    exportPdf(screenName);
+    setExportOpen(false);
+    setToast("PDF downloaded");
+    setTimeout(() => setToast(""), 1800);
   };
 
   const dev169 = Math.abs(calc.resW / calc.resH - 16 / 9) < 0.02;
@@ -375,7 +456,7 @@ export default function RubyLEDCalc() {
                 <span className={calc.fits ? "good" : "bad"}>
                   {calc.portsUsed} / {proc.ports} ports{calc.fits ? "" : " · OVER CAPACITY"}
                 </span>
-                <button className="dlbtn" onClick={downloadMap}>⬇ Export PNG</button>
+                <button className="dlbtn" onClick={() => { setScreenName(""); setExportOpen(true); }}>⬇ Export</button>
               </span>
             </div>
 
@@ -452,17 +533,31 @@ export default function RubyLEDCalc() {
         </section>
       </div>
 
-      {mapImg && (
-        <div className="modal" onClick={() => setMapImg(null)}>
-          <div className="modalbox" onClick={e => e.stopPropagation()}>
+      {exportOpen && (
+        <div className="modal" onClick={() => setExportOpen(false)}>
+          <div className="modalbox exportbox" onClick={e => e.stopPropagation()}>
             <div className="modalhead">
-              <span>Data Map — press and hold (or right-click) the image to save</span>
-              <button className="modalclose" onClick={() => setMapImg(null)}>✕</button>
+              <span>Export Proposal PDF</span>
+              <button className="modalclose" onClick={() => setExportOpen(false)}>✕</button>
             </div>
-            <img src={mapImg} alt="LED data map" className="mapimg" />
-            <div className="modalfoot">
-              <button className="dlbtn" onClick={tryDownload}>Try direct download</button>
-            </div>
+            <form onSubmit={submitExport}>
+              <div className="modalbody">
+                <div className="field">
+                  <label>Screen Name</label>
+                  <input
+                    type="text"
+                    autoFocus
+                    placeholder="e.g. Main Sanctuary Wall"
+                    value={screenName}
+                    onChange={e => setScreenName(e.target.value)}
+                  />
+                </div>
+              </div>
+              <div className="modalbtns">
+                <button type="button" className="dlbtn" onClick={() => setExportOpen(false)}>Cancel</button>
+                <button type="submit" className="copybtn">Export</button>
+              </div>
+            </form>
           </div>
         </div>
       )}
@@ -555,8 +650,9 @@ input:disabled { opacity: .45; }
 .modalhead { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 12px 14px; font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #B9B9C4; border-bottom: 1px solid #23232B; }
 .modalclose { background: none; border: none; color: #8D8D99; font-size: 16px; cursor: pointer; }
 .modalclose:hover { color: #fff; }
-.mapimg { width: 100%; height: auto; overflow: auto; background: #fff; }
-.modalfoot { padding: 12px 14px; display: flex; justify-content: flex-end; border-top: 1px solid #23232B; }
+.exportbox { max-width: 400px; }
+.modalbody { padding: 16px 14px; }
+.modalbtns { padding: 12px 14px; display: flex; justify-content: flex-end; gap: 10px; border-top: 1px solid #23232B; }
 .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: #AE001B; color: #fff; padding: 10px 22px; font-weight: 600; font-size: 13px; box-shadow: 0 8px 30px rgba(0,0,0,.5); animation: pop .2s ease; }
 @keyframes pop { from { opacity: 0; transform: translate(-50%, 8px); } }
 @media (prefers-reduced-motion: reduce) { .toast { animation: none; } }
